@@ -1,1 +1,5 @@
 /target
+model.bin
+*.bin
+*.md
+!README.md

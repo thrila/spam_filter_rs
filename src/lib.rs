@@ -7,6 +7,7 @@ use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 const TRAIN_LABELS: [&str; 2] = ["ham", "spam"];
+const ENRON_DATASETS: [&str; 3] = ["enron1", "enron2", "enron3"];
 const MODEL_MAGIC: &[u8; 8] = b"SPAMNB01";
 const MODEL_VERSION: u32 = 1;
 
@@ -545,6 +546,41 @@ fn resolve_corpus_path(path: &Path) -> Result<PathBuf> {
 }
 
 fn collect_documents(corpus_path: &Path) -> Result<Vec<(String, PathBuf)>> {
+    if has_class_directories(corpus_path) {
+        return collect_single_corpus(corpus_path);
+    }
+
+    let mut documents = Vec::new();
+    let mut missing = Vec::new();
+
+    for dataset in ENRON_DATASETS {
+        let dataset_dir = corpus_path.join(dataset);
+        if dataset_dir.is_dir() {
+            documents.extend(collect_single_corpus(&dataset_dir)?);
+        } else {
+            missing.push(dataset);
+        }
+    }
+
+    if documents.is_empty() {
+        return Err(SpamFilterError::InvalidCorpus(format!(
+            "no Enron corpora were found under '{}'",
+            corpus_path.display()
+        )));
+    }
+
+    if !missing.is_empty() {
+        return Err(SpamFilterError::InvalidCorpus(format!(
+            "expected '{}' to contain enron1, enron2, and enron3 directories; missing: {}",
+            corpus_path.display(),
+            missing.join(", ")
+        )));
+    }
+
+    Ok(documents)
+}
+
+fn collect_single_corpus(corpus_path: &Path) -> Result<Vec<(String, PathBuf)>> {
     let mut documents = Vec::new();
 
     for label in TRAIN_LABELS {
@@ -573,6 +609,12 @@ fn collect_documents(corpus_path: &Path) -> Result<Vec<(String, PathBuf)>> {
     }
 
     Ok(documents)
+}
+
+fn has_class_directories(corpus_path: &Path) -> bool {
+    TRAIN_LABELS
+        .iter()
+        .all(|label| corpus_path.join(label).is_dir())
 }
 
 fn collect_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
@@ -626,7 +668,7 @@ fn parse_command() -> Result<Command> {
 }
 
 fn parse_train_command(args: &[String]) -> Result<Command> {
-    let mut data = PathBuf::from("data/enron1");
+    let mut data = PathBuf::from("data");
     let mut output = PathBuf::from("model.bin");
     let mut index = 0;
 
@@ -698,7 +740,7 @@ fn parse_predict_command(args: &[String]) -> Result<Command> {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  spam_detector train [--data PATH] [--output FILE]\n  spam_detector predict --model FILE --file FILE\n\nDefaults:\n  --data    data/enron1\n  --output  model.bin"
+        "Usage:\n  spam_detector train [--data PATH] [--output FILE]\n  spam_detector predict --model FILE --file FILE\n\nDefaults:\n  --data    data\n  --output  model.bin"
     );
 }
 
@@ -807,19 +849,51 @@ mod tests {
     fn end_to_end_training_prediction_and_serialization() {
         let temp = TestDir::new("end_to_end");
         write_email(
-            temp.path().join("ham").join("nested").join("ham1.txt"),
+            temp.path()
+                .join("enron1")
+                .join("ham")
+                .join("nested")
+                .join("ham1.txt"),
             "Subject: project update\n\nplease review the meeting notes and report",
         );
         write_email(
-            temp.path().join("ham").join("ham2.txt"),
+            temp.path().join("enron1").join("ham").join("ham2.txt"),
             "Subject: lunch schedule\n\nlet us meet for lunch tomorrow",
         );
         write_email(
-            temp.path().join("spam").join("spam1.txt"),
+            temp.path().join("enron1").join("spam").join("spam1.txt"),
             "Subject: free money\n\nclaim your free prize now",
         );
         write_email(
-            temp.path().join("spam").join("nested").join("spam2.txt"),
+            temp.path()
+                .join("enron1")
+                .join("spam")
+                .join("nested")
+                .join("spam2.txt"),
+            "Subject: cheap pills\n\nbuy cheap pills and free offers",
+        );
+        write_email(
+            temp.path().join("enron2").join("ham").join("ham1.txt"),
+            "Subject: project update\n\nplease review the meeting notes and report",
+        );
+        write_email(
+            temp.path().join("enron2").join("spam").join("spam1.txt"),
+            "Subject: free money\n\nclaim your free prize now",
+        );
+        write_email(
+            temp.path()
+                .join("enron3")
+                .join("ham")
+                .join("nested")
+                .join("ham1.txt"),
+            "Subject: lunch schedule\n\nlet us meet for lunch tomorrow",
+        );
+        write_email(
+            temp.path()
+                .join("enron3")
+                .join("spam")
+                .join("nested")
+                .join("spam2.txt"),
             "Subject: cheap pills\n\nbuy cheap pills and free offers",
         );
 
@@ -868,8 +942,7 @@ mod tests {
                 std::process::id(),
                 suffix
             ));
-            fs::create_dir_all(path.join("ham")).expect("ham dir");
-            fs::create_dir_all(path.join("spam")).expect("spam dir");
+            fs::create_dir_all(&path).expect("temp dir");
             Self { path }
         }
 
